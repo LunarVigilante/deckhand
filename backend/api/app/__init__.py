@@ -13,6 +13,7 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
 from flask_restx import Api
+from flask_caching import Cache
 from werkzeug.exceptions import HTTPException
 from structlog import configure, get_logger, processors, stdlib
 
@@ -26,6 +27,7 @@ db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
 limiter = Limiter(key_func=get_remote_address)
+cache = Cache()
 api = Api(
     title='Discord Bot Platform API',
     version='1.0.0',
@@ -91,6 +93,11 @@ def create_app(config_name: str = None) -> Flask:
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
+    cache.init_app(app, config={
+        'CACHE_TYPE': 'redis',
+        'CACHE_REDIS_URL': app.config.get('REDIS_URL', 'redis://redis:6379/0'),
+        'CACHE_DEFAULT_TIMEOUT': 300  # 5 minutes default
+    })
     setup_cors(app)
     setup_limiter(app)
     setup_logging(app)
