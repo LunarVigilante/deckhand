@@ -14,6 +14,7 @@ from sqlalchemy.orm import relationship, backref
 from sqlalchemy.sql import func
 from pydantic import BaseModel, validator
 from . import db
+from .types import EncryptedText
 
 Base = declarative_base()
 
@@ -443,7 +444,8 @@ class MediaSearchHistory(Base):
     
     id = Column(Integer, primary_key=True)
     user_id = Column(BigInteger, ForeignKey('Users.user_id'), index=True)
-    query = Column(Text, nullable=False)
+    # At-rest encryption for search queries (PII minimization)
+    query = Column(EncryptedText(), nullable=False)
     media_type = Column(String(20), nullable=False)
     api_source = Column(String(20), nullable=False)
     results_count = Column(Integer, default=0)
