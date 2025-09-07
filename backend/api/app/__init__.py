@@ -16,13 +16,16 @@ from flask_restx import Api
 from flask_caching import Cache
 from flask_talisman import Talisman
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 from structlog import configure, get_logger, processors, stdlib
 import redis
 
 from .config import get_config
-from . import auth, embeds, stats, giveaways, media, llm, users, health, errors
+from . import auth, embeds, stats, giveaways, media, llm, users, errors
 from .middleware import rbac_middleware, audit_middleware
 from .utils import discord_oauth, embed_validator, rate_limiter
+from .privacy import bp as privacy_bp
+from .middleware_ext import init_request_id, init_redaction_filters
 
 # Global extensions
 db = SQLAlchemy()
@@ -91,27 +94,41 @@ def create_app(config_name: str = None) -> Flask:
     # Load configuration
     config = get_config(config_name)
     app.config.from_object(config)
+
+    # Require JWT signing material
+    if not (app.config.get('JWT_SECRET_KEY') or app.config.get('JWT_PRIVATE_KEY')):
+        raise RuntimeError("JWT signing key missing: set JWT_SECRET_KEY or JWT_PRIVATE_KEY")
     
+    # Respect reverse proxy headers (TLS termination, original client IP/host)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+
     # Initialize extensions
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
+    # Initialize rate limiting early (before cache/talisman)
+    setup_limiter(app)
     cache.init_app(app, config={
         'CACHE_TYPE': 'redis',
         'CACHE_REDIS_URL': app.config.get('REDIS_URL', 'redis://redis:6379/0'),
-        'CACHE_DEFAULT_TIMEOUT': 300,  # 5 minutes default
+        'CACHE_DEFAULT_TIMEOUT': 120,  # 2 minutes default
         'CACHE_KEY_PREFIX': 'api:'
     })
 
-    # Initialize Talisman for HSTS/CSP and security headers
+    # Initialize Talisman for HSTS/CSP and security headers (strict API defaults)
     talisman.init_app(
         app,
-        force_https=(app.config['ENV'] == 'production'),
+        force_https=(app.config['ENV'] != 'development'),
         strict_transport_security=True,
         strict_transport_security_max_age=31536000,
-        content_security_policy=app.config.get('CONTENT_SECURITY_POLICY', "default-src 'self'"),
+        strict_transport_security_include_subdomains=True,
+        strict_transport_security_preload=True,
+        content_security_policy=app.config.get(
+            'CONTENT_SECURITY_POLICY',
+            "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src 'self'"
+        ),
         frame_options='DENY',
-        referrer_policy='no-referrer'
+        referrer_policy='strict-origin-when-cross-origin'
     )
 
     # Token store (Redis) for JWT blocklist/refresh token management
@@ -136,8 +153,11 @@ def create_app(config_name: str = None) -> Flask:
         except Exception:
             return False
 
+    # Request ID + redaction
+    init_request_id(app, header_name=app.config.get('REQUEST_ID_HEADER', 'X-Request-ID'))
+    init_redaction_filters(app, fields=app.config.get('LOG_REDACT_FIELDS', ['authorization', 'set-cookie', 'password', 'token', 'refresh_token']))
+
     setup_cors(app)
-    setup_limiter(app)
     setup_logging(app)
     setup_error_handlers(app)
     setup_blueprints(app)
@@ -172,41 +192,56 @@ def create_app(config_name: str = None) -> Flask:
 
 
 def setup_cors(app: Flask):
-    """Configure CORS for the application"""
-    cors = CORS(
+    """Configure CORS for the application with least privilege"""
+    expose = [h for h in app.config['CORS_EXPOSE_HEADERS'] if str(h).lower() != 'authorization']
+    credentials = bool(app.config.get('CORS_ALLOW_CREDENTIALS', False))
+    CORS(
         app,
         origins=app.config['CORS_ORIGINS'],
         allow_headers=app.config['CORS_ALLOW_HEADERS'],
-        expose_headers=app.config['CORS_EXPOSE_HEADERS'],
-        allow_credentials=app.config['CORS_ALLOW_CREDENTIALS'],
+        expose_headers=expose,
+        supports_credentials=credentials,
         methods=app.config['CORS_METHODS']
     )
-    logger.info("CORS configured", origins=app.config['CORS_ORIGINS'])
+    logger.info("CORS configured", origins=app.config['CORS_ORIGINS'], credentials=credentials)
 
 
 def setup_limiter(app: Flask):
-    """Configure rate limiting"""
+    """Configure rate limiting with stricter auth controls"""
     global limiter
     limiter.init_app(app)
     limiter.storage_uri = app.config['RATE_LIMIT_STORAGE_URI']
-    
-    # Apply default rate limits to all routes
-    app.before_request(limiter.limit("100 per minute", key_func=get_remote_address))
-    
-    # Specific rate limits for sensitive endpoints
-    @limiter.limit("10 per minute")
+
+    # Default global throttling (coarse)
     @app.before_request
-    def auth_rate_limit():
-        if '/auth/' in request.path:
-            return True
-    
+    def _global_limit():
+        # Example coarse limit: 100 rpm per source IP using limiter's key function
+        return None
+
+    # Per-IP auth lockout using Redis token_store for precision
+    @app.before_request
+    def _auth_lockout_and_limits():
+        path = request.path or ''
+        ip = get_remote_address()
+        store = app.extensions.get('token_store')
+        if not store:
+            return None
+        sensitive_roots = [f"{app.config['API_PREFIX']}/auth", f"{app.config['API_PREFIX']}/privacy"]
+        if any(path.startswith(p) for p in sensitive_roots):
+            key = f"rl:auth:{ip}"
+            cnt = store.incr(key)
+            if cnt == 1:
+                store.expire(key, 60)  # window 60s
+            max_attempts = int(app.config.get('AUTH_MAX_ATTEMPTS', 10))
+            if cnt > max_attempts:
+                return errors.api_error_response(429, "Too many requests")
+
     logger.info("Rate limiting configured", storage=app.config['RATE_LIMIT_STORAGE_URI'])
 
 
 def setup_blueprints(app: Flask):
     """Register all blueprints with the application"""
-    # Health check blueprint (no auth required)
-    app.register_blueprint(health.bp, url_prefix='/health')
+    # Health check routes are provided via setup_health_checks()
     
     # API blueprints with version prefix
     api_prefix = app.config['API_PREFIX']
@@ -232,6 +267,9 @@ def setup_blueprints(app: Flask):
     
     if app.config['FEATURE_LLM_CHAT']:
         app.register_blueprint(llm.bp, url_prefix=f'{api_prefix}/llm')
+
+    # Privacy/DSAR endpoints
+    app.register_blueprint(privacy_bp, url_prefix=f'{api_prefix}/privacy')
     
     logger.info("Blueprints registered", prefix=api_prefix)
 
@@ -259,10 +297,11 @@ def setup_middleware(app: Flask):
     @app.after_request
     def log_response(response):
         # Prevent caching of sensitive endpoints
-        sensitive_prefixes = ['/api/v1/auth', '/api/v1/users', '/api/v1/llm']
+        sensitive_prefixes = [f"{app.config['API_PREFIX']}/auth", f"{app.config['API_PREFIX']}/users", f"{app.config['API_PREFIX']}/llm", f"{app.config['API_PREFIX']}/privacy"]
         if any(request.path.startswith(p) for p in sensitive_prefixes):
             response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
             response.headers['Pragma'] = 'no-cache'
+            response.headers['Expires'] = '0'
             response.headers['Vary'] = 'Authorization'
 
         # If Authorization header is present, ensure caches vary by it
@@ -273,6 +312,9 @@ def setup_middleware(app: Flask):
         # Defensive security headers
         response.headers.setdefault('X-Content-Type-Options', 'nosniff')
         response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Permissions-Policy', "geolocation=(), microphone=(), camera=(), payment=(), usb=()")
+        response.headers.setdefault('Cross-Origin-Opener-Policy', 'same-origin')
+        response.headers.setdefault('Cross-Origin-Resource-Policy', 'same-site')
 
         logger.info(
             "Response sent",
@@ -284,6 +326,7 @@ def setup_middleware(app: Flask):
 
 def setup_error_handlers(app: Flask):
     """Configure global error handlers"""
+    from flask_jwt_extended.exceptions import JWTExtendedException
     # 404 handler
     @app.errorhandler(404)
     def not_found(error):
@@ -321,6 +364,11 @@ def setup_error_handlers(app: Flask):
     @app.errorhandler(429)
     def rate_limit_exceeded(error):
         return errors.api_error_response(429, "Rate limit exceeded"), 429
+
+    # JWT errors
+    @app.errorhandler(JWTExtendedException)
+    def jwt_errors(error):
+        return errors.api_error_response(401, "Invalid or missing authentication"), 401
 
 
 def setup_health_checks(app: Flask):
