@@ -64,6 +64,13 @@ class Config:
     JWT_ACCESS_TOKEN_EXPIRES = int(os.environ.get('JWT_ACCESS_TOKEN_EXPIRES', 3600))
     JWT_REFRESH_TOKEN_EXPIRES = int(os.environ.get('JWT_REFRESH_TOKEN_EXPIRES', 2592000))
     JWT_ALGORITHM = 'HS256'
+    # Cookie-based JWT transport (compliance hardening)
+    JWT_TOKEN_LOCATION = tuple(os.environ.get('JWT_TOKEN_LOCATION', 'headers,cookies').split(','))
+    JWT_COOKIE_SECURE = os.environ.get('JWT_COOKIE_SECURE', 'True').lower() == 'true'
+    JWT_COOKIE_SAMESITE = os.environ.get('JWT_COOKIE_SAMESITE', 'Lax')
+    JWT_COOKIE_CSRF_PROTECT = os.environ.get('JWT_COOKIE_CSRF_PROTECT', 'True').lower() == 'true'
+    JWT_COOKIE_PATH = os.environ.get('JWT_COOKIE_PATH', '/')
+    JWT_COOKIE_DOMAIN = os.environ.get('JWT_COOKIE_DOMAIN') or None
     
     # Rate limiting settings
     RATE_LIMIT_STORAGE_URI = os.environ.get('RATE_LIMIT_STORAGE_URL', 'memory://')
@@ -115,6 +122,11 @@ class Config:
     # Security settings
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
     PERMANENT_SESSION_LIFETIME = 3600  # 1 hour
+    # CSP used by Flask-Talisman (override in env for production)
+    CONTENT_SECURITY_POLICY = os.environ.get(
+        'CONTENT_SECURITY_POLICY',
+        "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
+    )
     
     # Health check settings
     HEALTH_CHECK_ENABLED = True

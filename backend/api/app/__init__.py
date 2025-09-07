@@ -5,7 +5,7 @@ Main application initialization and configuration
 import logging
 import os
 from pathlib import Path
-from flask import Flask
+from flask import Flask, request, g
 from flask_sqlalchemy import SQLAlchemy
 from flask_cors import CORS
 from flask_jwt_extended import JWTManager
@@ -14,8 +14,10 @@ from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
 from flask_restx import Api
 from flask_caching import Cache
+from flask_talisman import Talisman
 from werkzeug.exceptions import HTTPException
 from structlog import configure, get_logger, processors, stdlib
+import redis
 
 from .config import get_config
 from . import auth, embeds, stats, giveaways, media, llm, users, health, errors
@@ -28,6 +30,7 @@ migrate = Migrate()
 jwt = JWTManager()
 limiter = Limiter(key_func=get_remote_address)
 cache = Cache()
+talisman = Talisman()
 api = Api(
     title='Discord Bot Platform API',
     version='1.0.0',
@@ -96,8 +99,43 @@ def create_app(config_name: str = None) -> Flask:
     cache.init_app(app, config={
         'CACHE_TYPE': 'redis',
         'CACHE_REDIS_URL': app.config.get('REDIS_URL', 'redis://redis:6379/0'),
-        'CACHE_DEFAULT_TIMEOUT': 300  # 5 minutes default
+        'CACHE_DEFAULT_TIMEOUT': 300,  # 5 minutes default
+        'CACHE_KEY_PREFIX': 'api:'
     })
+
+    # Initialize Talisman for HSTS/CSP and security headers
+    talisman.init_app(
+        app,
+        force_https=(app.config['ENV'] == 'production'),
+        strict_transport_security=True,
+        strict_transport_security_max_age=31536000,
+        content_security_policy=app.config.get('CONTENT_SECURITY_POLICY', "default-src 'self'"),
+        frame_options='DENY',
+        referrer_policy='no-referrer'
+    )
+
+    # Token store (Redis) for JWT blocklist/refresh token management
+    try:
+        app.extensions['token_store'] = redis.Redis.from_url(
+            app.config.get('REDIS_URL', 'redis://redis:6379/0'),
+            decode_responses=True
+        )
+    except Exception:
+        app.extensions['token_store'] = None
+
+    @jwt.token_in_blocklist_loader
+    def check_if_token_revoked(jwt_header, jwt_payload):
+        store = app.extensions.get('token_store')
+        if not store:
+            return False
+        jti = jwt_payload.get('jti')
+        if not jti:
+            return False
+        try:
+            return store.exists(f"jwt:blocklist:{jti}") == 1
+        except Exception:
+            return False
+
     setup_cors(app)
     setup_limiter(app)
     setup_logging(app)
@@ -220,6 +258,22 @@ def setup_middleware(app: Flask):
     # Response logging
     @app.after_request
     def log_response(response):
+        # Prevent caching of sensitive endpoints
+        sensitive_prefixes = ['/api/v1/auth', '/api/v1/users', '/api/v1/llm']
+        if any(request.path.startswith(p) for p in sensitive_prefixes):
+            response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, private'
+            response.headers['Pragma'] = 'no-cache'
+            response.headers['Vary'] = 'Authorization'
+
+        # If Authorization header is present, ensure caches vary by it
+        if request.headers.get('Authorization'):
+            existing_vary = response.headers.get('Vary')
+            response.headers['Vary'] = 'Authorization' if not existing_vary else f"{existing_vary}, Authorization"
+
+        # Defensive security headers
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+
         logger.info(
             "Response sent",
             status=response.status_code,

@@ -9,6 +9,7 @@ from datetime import timedelta, datetime
 from typing import Dict, Any, Optional, Tuple
 from urllib.parse import urlencode
 import requests
+import time
 from flask import Blueprint, request, current_app, jsonify, redirect, session, url_for
 from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
 from werkzeug.exceptions import BadRequest, Unauthorized
@@ -267,10 +268,23 @@ def oauth_callback():
 def logout():
     """Logout and invalidate tokens"""
     user_id = get_jwt_identity()
-    
-    # Invalidate refresh token
+
+    # Revoke current access token via blocklist (JWT jti)
+    try:
+        claims = get_jwt()
+        jti = claims.get('jti')
+        exp = claims.get('exp')  # epoch seconds
+        ttl = max(int(exp - time.time()), 0) if exp else 0
+        store = current_app.extensions.get('token_store')
+        if store and jti:
+            # Blocklist the token until it would have expired
+            store.setex(f"jwt:blocklist:{jti}", ttl or 1, '1')
+    except Exception as e:
+        current_app.logger.warning(f"Failed to revoke access token: {e}")
+
+    # Invalidate refresh token (implementation-specific)
     invalidate_refresh_token(user_id)
-    
+
     # Log logout
     AuditLog.log_action(
         user_id=user_id,
@@ -279,7 +293,7 @@ def logout():
         user_agent=request.headers.get('User-Agent'),
         success=True
     )
-    
+
     return jsonify({'message': 'Logged out successfully'}), 200
 
 
