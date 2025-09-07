@@ -1,202 +1,349 @@
-## 📚 Documentation
+# Discord Bot Media Community Platform
 
-### Getting Started
-- **[README.md](README.md)** - Main project documentation
-- **[API_REFERENCE.md](docs/API_REFERENCE.md)** - Complete API documentation
-- **[DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)** - Deployment and scaling guide
-- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Troubleshooting common issues
+A comprehensive, production-ready Discord bot platform with React frontend, Flask API backend, and discord.py bot worker. Features media search, LLM chat, embed management, giveaways, statistics, and more.
 
-### API Documentation
-- **Interactive API Docs**: http://localhost:5000/docs (Swagger UI)
-- **ReDoc Documentation**: http://localhost:5000/redoc
-- **OpenAPI Specification**: http://localhost:5000/api/v1/openapi.json
+## 🚀 Quick Start
 
-### Additional Resources
-- **Environment Variables**: See `.env.example` for all configuration options
-- **Database Schema**: See `database/schema.sql` for complete database structure
-- **Docker Configuration**: See `docker-compose.yml` for service orchestration
-- **Testing**: Run `python run_tests.py --help` for testing options
+### Prerequisites
+- Ubuntu 20.04+ or similar Linux distribution
+- At least 4GB RAM, 2 CPU cores, 20GB storage
+- Root or sudo access for initial setup
 
-## 🔧 Development
-
-### Project Structure
-```
-discord-bot-platform/
-├── frontend/                   # React web application
-│   ├── src/
-│   │   ├── components/         # Reusable UI components
-│   │   ├── pages/             # Page components
-│   │   ├── contexts/          # React contexts
-│   │   ├── services/          # API services
-│   │   └── utils/             # Utility functions
-│   ├── public/
-│   └── package.json
-├── backend/
-│   ├── api/                   # Flask API server
-│   │   ├── app/               # Application code
-│   │   ├── requirements.txt
-│   │   └── Dockerfile
-│   └── bot/                   # Discord bot worker
-│       ├── bot/               # Bot code
-│       ├── requirements.txt
-│       └── Dockerfile
-├── database/                  # Database schema and migrations
-├── docker/                    # Docker configuration
-├── docs/                      # Documentation
-├── tests/                     # Test suite
-└── shared/                    # Shared utilities
-```
-
-### Development Workflow
+### Automated Setup (Recommended)
 ```bash
-# Install frontend dependencies
-cd frontend && npm install
+# Clone the repository
+git clone <repository-url>
+cd discord-bot-platform
 
-# Start development servers
-docker-compose -f docker-compose.dev.yml up
+# Run the automated setup script (handles all security configurations)
+bash scripts/setup.sh
 
-# Run tests
-python run_tests.py --unit
+# Configure your environment variables
+cp .env.example .env
+nano .env  # Fill in your API keys and configuration
 
-# Format code
-black backend/ tests/
-npx prettier --write frontend/src/
-
-# Lint code
-flake8 backend/
-npx eslint frontend/src/
-```
-
-### Code Quality
-- **Black**: Python code formatting
-- **Flake8**: Python linting
-- **ESLint**: JavaScript/TypeScript linting
-- **Prettier**: Code formatting
-- **MyPy**: Type checking
-- **Bandit**: Security linting
-
-## 🚀 Deployment Options
-
-### Docker Compose (Recommended)
-```bash
-# Production deployment
+# Start the platform
 docker-compose up -d
 
-# With custom configuration
-docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+# Run comprehensive tests
+bash scripts/test.sh --all
 
-# Scale services
-docker-compose up -d --scale api=3
-
-# Update deployment
-docker-compose pull && docker-compose up -d
+# Access the application
+# Frontend: http://localhost:3000
+# API Docs: http://localhost:5000/docs
 ```
 
-### Cloud Platforms
-- **AWS**: ECS, EKS, or Elastic Beanstalk
-- **Google Cloud**: Cloud Run, GKE, or App Engine
-- **Azure**: Container Instances, AKS, or App Service
-- **DigitalOcean**: App Platform or Droplets with Docker
+### Manual Setup
+See [SETUP.md](SETUP.md) for detailed manual installation instructions.
 
-## 🧪 Testing
+## 🏗️ Architecture
 
-### Run All Tests
-```bash
-# Run complete test suite
-python run_tests.py --all
-
-# Run specific test types
-python run_tests.py --unit
-python run_tests.py --integration
-python run_tests.py --security
-
-# Generate coverage report
-python run_tests.py --coverage
 ```
-
-### Test Structure
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   React Frontend│    │   Flask API     │    │ Discord.py Bot  │
+│   (Vite)        │◄──►│   (REST API)    │◄──►│   (Worker)      │
+│                 │    │                 │    │                 │
+│ - Dashboard     │    │ - Auth (OAuth2) │    │ - Slash Commands│
+│ - Embed Builder │    │ - CRUD Endpoints│    │ - Event Handlers│
+│ - Statistics    │    │ - Rate Limiting │    │ - Scheduled Tasks│
+│ - Media Tools   │    │ - Caching       │    │ - API Integrations│
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │
+                    ┌─────────────────┐
+                    │ PostgreSQL DB  │
+                    │   + Redis      │
+                    │   (Caching)    │
+                    └─────────────────┘
 ```
-tests/
-├── conftest.py              # Test configuration and fixtures
-├── test_security.py         # Security and input validation tests
-├── test_api_integration.py  # API endpoint integration tests
-├── test_models.py           # Database model tests
-├── test_auth.py             # Authentication tests
-└── test_bot.py              # Discord bot tests
-```
-
-### Test Coverage
-- **Unit Tests**: Individual function/component testing
-- **Integration Tests**: API endpoint and service interaction testing
-- **Security Tests**: Input validation and security feature testing
-- **End-to-End Tests**: Complete user workflow testing
 
 ## 🔒 Security Features
 
-### Authentication & Authorization
-- **Discord OAuth2**: Secure authentication with PKCE
-- **JWT Tokens**: Stateless authentication with refresh tokens
-- **Role-Based Access Control**: Server role-based permissions
-- **Session Management**: Secure session handling
+### High-Security Configuration
+- **Non-root containers**: All services run as non-root users (1000:1000)
+- **Resource limits**: Memory and CPU limits prevent resource exhaustion
+- **Secret management**: Auto-generated secure secrets with rotation
+- **Firewall hardening**: UFW with minimal open ports
+- **Input validation**: Comprehensive sanitization and validation
+- **Rate limiting**: Per-endpoint and global rate limits
+- **Audit logging**: Complete request/response logging
+- **HTTPS ready**: SSL/TLS configuration with Let's Encrypt
 
-### Input Validation & Sanitization
-- **SQL Injection Prevention**: Parameterized queries and input validation
-- **XSS Protection**: HTML sanitization and content security policy
-- **Input Length Limits**: Maximum length validation for all inputs
-- **Type Validation**: Strict type checking for API inputs
+### Security Best Practices
+- OWASP Top 10 compliance
+- Docker CIS benchmarks adherence
+- PEP 8 Python standards
+- SOC 2 ready logging
+- Automated security scanning
+- Dependency vulnerability monitoring
 
-### Security Headers
-- **Content Security Policy**: XSS protection and resource restrictions
-- **HSTS**: HTTP Strict Transport Security
-- **X-Frame-Options**: Clickjacking protection
-- **X-Content-Type-Options**: MIME type sniffing protection
+## 📊 Features
 
-### Rate Limiting
-- **API Rate Limits**: Configurable per-endpoint limits
-- **Authentication Limits**: Stricter limits for auth endpoints
-- **Redis Backend**: Distributed rate limiting support
+### 🤖 Discord Bot Features
+- **Media Search**: TMDB, Anilist, TheTVDB integration
+- **LLM Chat**: OpenRouter-powered AI conversations
+- **Embed Management**: WYSIWYG editor with live preview
+- **Giveaway System**: Automated winner selection
+- **Statistics Engine**: Real-time analytics and reporting
+- **Watch Parties**: Discord Events API integration
+- **Auto-moderation**: Content filtering and spam prevention
+
+### 🌐 Web Dashboard Features
+- **User Authentication**: Discord OAuth2 with PKCE
+- **Role-Based Access Control**: Granular permissions
+- **Real-time Statistics**: Charts and analytics
+- **Embed Builder**: Drag-and-drop editor
+- **Media Management**: Search and organize content
+- **Giveaway Manager**: Create and monitor giveaways
+- **Audit Logs**: Complete activity tracking
+
+### 🔧 API Features
+- **RESTful Design**: Clean, documented endpoints
+- **Rate Limiting**: Configurable per-endpoint limits
+- **Caching**: Redis-backed response caching
+- **Health Checks**: Comprehensive monitoring
+- **Swagger Documentation**: Interactive API docs
+- **Webhook Support**: Real-time notifications
+
+## 🛠️ Technology Stack
+
+### Backend
+- **Python 3.11**: Core language
+- **Flask**: Web framework with RESTX
+- **SQLAlchemy**: ORM with Alembic migrations
+- **PostgreSQL**: Primary database
+- **Redis**: Caching and sessions
+- **discord.py**: Bot framework
+- **Pydantic**: Data validation
+- **Structlog**: Structured logging
+
+### Frontend
+- **React 18**: UI framework
+- **Vite**: Build tool and dev server
+- **TypeScript**: Type safety
+- **Material-UI**: Component library
+- **React Router**: Navigation
+- **Zustand**: State management
+- **Recharts**: Data visualization
+
+### DevOps
+- **Docker**: Containerization
+- **Docker Compose**: Orchestration
+- **nginx**: Reverse proxy and load balancing
+- **Let's Encrypt**: SSL certificates
+- **Prometheus**: Monitoring
+- **Grafana**: Dashboards
+
+## 🚀 Deployment
+
+### Production Deployment
+```bash
+# Use production docker-compose override
+docker-compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+# Set up SSL certificates
+certbot --nginx -d your-domain.com
+
+# Configure monitoring
+docker-compose -f docker-compose.monitoring.yml up -d
+```
+
+### Scaling
+```bash
+# Scale API instances
+docker-compose up -d --scale api=3
+
+# Scale bot workers
+docker-compose up -d --scale bot=2
+```
+
+## 📈 Monitoring & Maintenance
+
+### Health Checks
+```bash
+# Check all services
+bash scripts/test.sh --services
+
+# Detailed health check
+curl http://localhost:5000/health/detailed
+```
+
+### Maintenance Tasks
+```bash
+# Run all maintenance tasks
+bash scripts/maintenance.sh --all
+
+# Backup database
+bash scripts/maintenance.sh --backup
+
+# Rotate secrets
+bash scripts/maintenance.sh --rotate-jwt
+```
+
+### Monitoring Stack
+- **Health Checks**: Automated service monitoring
+- **Prometheus**: Metrics collection
+- **Grafana**: Visualization dashboards
+- **Alert Manager**: Notification system
+- **ELK Stack**: Log aggregation and analysis
+
+## 🔧 Configuration
+
+### Environment Variables
+See `.env.example` for all configuration options. Key variables:
+
+```bash
+# Database
+POSTGRES_PASSWORD=your_secure_password
+DATABASE_URL=postgresql://user:pass@host:5432/db
+
+# Discord
+DISCORD_BOT_TOKEN=your_bot_token
+DISCORD_CLIENT_ID=your_client_id
+DISCORD_CLIENT_SECRET=your_client_secret
+
+# APIs
+OPENROUTER_API_KEY=your_openrouter_key
+TMDB_API_KEY=your_tmdb_key
+
+# Security
+FLASK_SECRET_KEY=your_flask_secret
+JWT_SECRET_KEY=your_jwt_secret
+```
+
+### Docker Configuration
+- **Resource Limits**: Configured in `docker-compose.yml`
+- **Health Checks**: Automatic service monitoring
+- **Logging**: JSON format with rotation
+- **Networks**: Isolated service communication
+
+## 🧪 Testing
+
+### Automated Testing
+```bash
+# Run all tests
+bash scripts/test.sh --all
+
+# Test specific components
+bash scripts/test.sh --backend    # API and bot tests
+bash scripts/test.sh --frontend   # React tests
+bash scripts/test.sh --performance # Load testing
+```
+
+### Manual Testing
+```bash
+# Test API endpoints
+curl http://localhost:5000/health
+
+# Test bot connectivity
+docker-compose logs bot
+
+# Test database connection
+docker-compose exec postgres pg_isready
+```
+
+## 📚 API Documentation
+
+### Authentication
+```bash
+# Login with Discord OAuth2
+GET /api/v1/auth/login
+
+# Refresh token
+POST /api/v1/auth/refresh
+
+# Logout
+POST /api/v1/auth/logout
+```
+
+### Core Endpoints
+```bash
+# Health check
+GET /health
+
+# User management
+GET /api/v1/users
+POST /api/v1/users
+
+# Embed management
+GET /api/v1/embeds
+POST /api/v1/embeds
+
+# Statistics
+GET /api/v1/stats/dashboard
+GET /api/v1/stats/users
+
+# Media search
+GET /api/v1/media/search?q=movie_title
+
+# Giveaways
+GET /api/v1/giveaways
+POST /api/v1/giveaways
+```
 
 ## 🤝 Contributing
 
 1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+2. Create a feature branch
+3. Run tests: `bash scripts/test.sh --all`
+4. Submit a pull request
 
-### Development Guidelines
-- Follow existing code style and patterns
-- Write tests for new features
-- Update documentation as needed
-- Ensure all tests pass before submitting PR
-- Use conventional commit messages
+### Development Setup
+```bash
+# Install dependencies
+npm install
+pip install -r backend/api/requirements.txt
+pip install -r backend/bot/requirements.txt
 
-## 📝 License
+# Start development servers
+docker-compose -f docker-compose.dev.yml up -d
+npm run dev
+```
+
+## 📄 License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ## 🆘 Support
 
-### Common Issues
-- **Database Connection**: Check PostgreSQL container is running
-- **Bot Connection**: Verify Discord token and permissions
-- **API Errors**: Check logs with `docker-compose logs api`
-- **Frontend Issues**: Clear browser cache and rebuild
-
-### Getting Help
-- **Documentation**: Check [docs/](docs/) directory
-- **Issues**: Create GitHub issue with detailed description
-- **Discussions**: Use GitHub Discussions for questions
-- **Logs**: Include relevant logs when reporting issues
-
 ### Troubleshooting
-For detailed troubleshooting guides, see:
-- **[TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** - Common issues and solutions
-- **[DEPLOYMENT_GUIDE.md](docs/DEPLOYMENT_GUIDE.md)** - Deployment troubleshooting
-- **Logs**: `docker-compose logs -f` for real-time monitoring
+- Check logs: `docker-compose logs`
+- Run diagnostics: `bash scripts/test.sh --services`
+- View health status: `curl http://localhost:5000/health`
+
+### Common Issues
+- **Port conflicts**: Check `netstat -tlnp`
+- **Permission errors**: Ensure proper file permissions
+- **Database connection**: Verify PostgreSQL is running
+- **Bot not responding**: Check Discord token and permissions
+
+### Documentation
+- [Setup Guide](SETUP.md)
+- [API Documentation](API.md)
+- [Deployment Guide](DEPLOYMENT.md)
+- [Troubleshooting](TROUBLESHOOTING.md)
+
+## 🎯 Roadmap
+
+### Upcoming Features
+- [ ] Mobile app (React Native)
+- [ ] Voice channel integration
+- [ ] Advanced analytics dashboard
+- [ ] Multi-server support
+- [ ] Plugin system
+- [ ] Backup and restore
+- [ ] Multi-language support
+
+### Performance Improvements
+- [ ] Database query optimization
+- [ ] CDN integration
+- [ ] Horizontal scaling
+- [ ] Caching layer expansion
+- [ ] Background job processing
 
 ---
 
-**Happy coding! 🎉**
+**Built with ❤️ for the Discord community**
 
-For more information, visit the [documentation](docs/) or create an issue for support.# deckhand
+*For questions or support, please open an issue on GitHub.*

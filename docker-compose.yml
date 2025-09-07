@@ -56,6 +56,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${API_CONTAINER_NAME:-discord_bot_api}
     restart: unless-stopped
+    user: "1000:1000"
     environment:
       - FLASK_ENV=${FLASK_ENV:-production}
       - DATABASE_URL=postgresql://${POSTGRES_USER:-discord_bot_user}:${POSTGRES_PASSWORD:-your_secure_password_here}@postgres:5432/${POSTGRES_DB:-discord_bot_platform}
@@ -97,6 +98,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
 
   bot:
     build:
@@ -104,6 +113,7 @@ services:
       dockerfile: Dockerfile
     container_name: ${BOT_CONTAINER_NAME:-discord_bot_worker}
     restart: unless-stopped
+    user: "1000:1000"
     environment:
       - DATABASE_URL=postgresql://${POSTGRES_USER:-discord_bot_user}:${POSTGRES_PASSWORD:-your_secure_password_here}@postgres:5432/${POSTGRES_DB:-discord_bot_platform}
       - REDIS_URL=redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379/${REDIS_DB:-0}
@@ -143,6 +153,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+        reservations:
+          memory: 256M
+          cpus: '0.25'
 
   frontend:
     build:
@@ -151,6 +169,7 @@ services:
       target: production
     container_name: ${FRONTEND_CONTAINER_NAME:-discord_bot_frontend}
     restart: unless-stopped
+    user: "1001:1001"
     environment:
       - VITE_API_URL=http://api:5000
       - VITE_DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
@@ -173,6 +192,14 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.25'
+        reservations:
+          memory: 128M
+          cpus: '0.1'
 
   # Development override - uncomment for development with hot reload
   # frontend-dev:

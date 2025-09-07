@@ -63,7 +63,23 @@ class Config:
     JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY') or settings.get('JWT_SECRET_KEY')
     JWT_ACCESS_TOKEN_EXPIRES = int(os.environ.get('JWT_ACCESS_TOKEN_EXPIRES', 3600))
     JWT_REFRESH_TOKEN_EXPIRES = int(os.environ.get('JWT_REFRESH_TOKEN_EXPIRES', 2592000))
-    JWT_ALGORITHM = 'HS256'
+    # Algorithm defaults to HS256 for backward compatibility; set to RS256/ES256 with keys for stronger security
+    JWT_ALGORITHM = os.environ.get('JWT_ALGORITHM', 'HS256')
+    JWT_PRIVATE_KEY = os.environ.get('JWT_PRIVATE_KEY')
+    JWT_PUBLIC_KEY = os.environ.get('JWT_PUBLIC_KEY')
+    JWT_KEY_ID = os.environ.get('JWT_KEY_ID', 'jwt-key-1')
+    JWT_ISSUER = os.environ.get('JWT_ISSUER', 'https://api.local')
+    JWT_AUDIENCE = os.environ.get('JWT_AUDIENCE', 'deckhand-api')
+    JWT_DECODE_AUDIENCE = os.environ.get('JWT_DECODE_AUDIENCE', JWT_AUDIENCE)
+    JWT_DECODE_LEEWAY = int(os.environ.get('JWT_DECODE_LEEWAY', '10'))
+    JWT_BLOCKLIST_ENABLED = True
+    # Cookie-based JWT transport (compliance hardening)
+    JWT_TOKEN_LOCATION = tuple(os.environ.get('JWT_TOKEN_LOCATION', 'headers,cookies').split(','))
+    JWT_COOKIE_SECURE = os.environ.get('JWT_COOKIE_SECURE', 'True').lower() == 'true'
+    JWT_COOKIE_SAMESITE = os.environ.get('JWT_COOKIE_SAMESITE', 'Lax')
+    JWT_COOKIE_CSRF_PROTECT = os.environ.get('JWT_COOKIE_CSRF_PROTECT', 'True').lower() == 'true'
+    JWT_COOKIE_PATH = os.environ.get('JWT_COOKIE_PATH', '/')
+    JWT_COOKIE_DOMAIN = os.environ.get('JWT_COOKIE_DOMAIN') or None
     
     # Rate limiting settings
     RATE_LIMIT_STORAGE_URI = os.environ.get('RATE_LIMIT_STORAGE_URL', 'memory://')
@@ -92,7 +108,7 @@ class Config:
     CORS_ORIGINS = os.environ.get('CORS_ORIGINS', 'http://localhost:3000,http://localhost:5173').split(',')
     CORS_ALLOW_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With']
     CORS_EXPOSE_HEADERS = ['Content-Range']
-    CORS_ALLOW_CREDENTIALS = True
+    CORS_ALLOW_CREDENTIALS = os.environ.get('CORS_ALLOW_CREDENTIALS', 'False').lower() == 'true'
     CORS_METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH']
     
     # Logging settings
@@ -115,6 +131,22 @@ class Config:
     # Security settings
     MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
     PERMANENT_SESSION_LIFETIME = 3600  # 1 hour
+    PREFERRED_URL_SCHEME = os.environ.get('PREFERRED_URL_SCHEME', 'https')
+    # CSP used by Flask-Talisman (override in env for production)
+    CONTENT_SECURITY_POLICY = os.environ.get(
+        'CONTENT_SECURITY_POLICY',
+        "default-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; connect-src 'self'; img-src 'self' data:; font-src 'self'; script-src 'self'; style-src 'self'"
+    )
+    # Logging and request correlation
+    REQUEST_ID_HEADER = os.environ.get('REQUEST_ID_HEADER', 'X-Request-ID')
+    LOG_REDACT_FIELDS = os.environ.get('LOG_REDACT_FIELDS', 'authorization,set-cookie,password,token,refresh_token').split(',')
+    # Encryption / KMS
+    ENCRYPTION_KEY_ID = os.environ.get('ENCRYPTION_KEY_ID', 'local-default-v1')
+    PII_ENCRYPTION_KEY = os.environ.get('PII_ENCRYPTION_KEY')
+    KMS_PROVIDER = os.environ.get('KMS_PROVIDER', 'env')  # env|aws-kms|gcp-kms|azure-kv
+    ENFORCE_DB_TLS = os.environ.get('ENFORCE_DB_TLS', 'true').lower() == 'true'
+    ENFORCE_REDIS_TLS = os.environ.get('ENFORCE_REDIS_TLS', 'false').lower() == 'true'
+    APP_ENV = os.environ.get('APP_ENV', ENV)
     
     # Health check settings
     HEALTH_CHECK_ENABLED = True
@@ -188,6 +220,7 @@ class ProductionConfig(Config):
     SESSION_COOKIE_SECURE = True
     SESSION_COOKIE_HTTPONLY = True
     SESSION_COOKIE_SAMESITE = 'Lax'
+    PREFERRED_URL_SCHEME = 'https'
     
     # Security headers
     WTF_CSRF_ENABLED = True

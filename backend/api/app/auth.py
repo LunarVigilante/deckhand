@@ -9,8 +9,9 @@ from datetime import timedelta, datetime
 from typing import Dict, Any, Optional, Tuple
 from urllib.parse import urlencode
 import requests
+import time
 from flask import Blueprint, request, current_app, jsonify, redirect, session, url_for
-from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt
+from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity, get_jwt, decode_token
 from werkzeug.exceptions import BadRequest, Unauthorized
 from sqlalchemy.exc import IntegrityError
 from .models import db, User, AuditLog
@@ -210,22 +211,25 @@ def oauth_callback():
         
         db.session.commit()
         
-        # Generate JWT tokens
-        permissions = get_user_permissions(roles)
-        identity = {
-            'sub': str(user.user_id),
-            'username': user.username,
-            'roles': roles,
-            'permissions': permissions,
-            'guild_id': guild_id
+        # Generate JWT tokens with minimal claims (data minimization)
+        identity = {'sub': str(user.user_id)}
+        ua = request.headers.get('User-Agent', '')
+        add_claims = {
+            'iss': current_app.config.get('JWT_ISSUER', 'https://api.local'),
+            'aud': current_app.config.get('JWT_AUDIENCE', 'deckhand-api'),
+            'ua': hashlib.sha256(ua.encode('utf-8')).hexdigest(),
+            'kid': current_app.config.get('JWT_KEY_ID', 'jwt-key-1')
         }
-        
         access_token = create_access_token(
             identity=identity,
+            additional_claims=add_claims,
             expires_delta=timedelta(seconds=current_app.config['JWT_ACCESS_TOKEN_EXPIRES'])
         )
-        refresh_token = create_refresh_token(identity=identity)
-        
+        refresh_token = create_refresh_token(identity=identity, additional_claims=add_claims)
+
+        # Persist refresh token (hashed) with rotation family
+        store_refresh_token(user.user_id, refresh_token, rotate=True)
+
         # Log successful authentication
         AuditLog.log_action(
             user_id=user.user_id,
@@ -267,10 +271,23 @@ def oauth_callback():
 def logout():
     """Logout and invalidate tokens"""
     user_id = get_jwt_identity()
-    
-    # Invalidate refresh token
-    invalidate_refresh_token(user_id)
-    
+
+    # Revoke current access token via blocklist (JWT jti)
+    try:
+        claims = get_jwt()
+        jti = claims.get('jti')
+        exp = claims.get('exp')  # epoch seconds
+        ttl = max(int(exp - time.time()), 0) if exp else 0
+        store = current_app.extensions.get('token_store')
+        if store and jti:
+            # Blocklist the token until it would have expired
+            store.setex(f"jwt:blocklist:{jti}", ttl or 1, '1')
+    except Exception as e:
+        current_app.logger.warning(f"Failed to revoke access token: {e}")
+
+    # Invalidate all refresh tokens for user (logout all sessions)
+    invalidate_refresh_tokens(user_id)
+
     # Log logout
     AuditLog.log_action(
         user_id=user_id,
@@ -279,31 +296,34 @@ def logout():
         user_agent=request.headers.get('User-Agent'),
         success=True
     )
-    
+
     return jsonify({'message': 'Logged out successfully'}), 200
 
 
-@bp.route('/refresh')
+@bp.route('/refresh', methods=['POST'])
 def refresh_token():
-    """Refresh access token using refresh token"""
-    refresh_token = request.args.get('refresh_token')
+    """Refresh access token using refresh token (rotation with reuse detection)"""
+    payload = request.get_json(silent=True) or {}
+    refresh_token = payload.get('refresh_token') or request.args.get('refresh_token')
     if not refresh_token:
         return api_error_response(400, "Refresh token required")
     
     try:
-        # Verify refresh token (implement secure verification)
-        user_identity = verify_refresh_token(refresh_token)
+        user_identity = rotate_refresh_token(refresh_token)
         if not user_identity:
-            return api_error_response(401, "Invalid refresh token")
-        
-        # Generate new access token
-        access_token = create_access_token(identity=user_identity)
-        
+            return api_error_response(401, "Invalid or reused refresh token")
+        ua = request.headers.get('User-Agent', '')
+        add_claims = {
+            'iss': current_app.config.get('JWT_ISSUER', 'https://api.local'),
+            'aud': current_app.config.get('JWT_AUDIENCE', 'deckhand-api'),
+            'ua': hashlib.sha256(ua.encode('utf-8')).hexdigest(),
+            'kid': current_app.config.get('JWT_KEY_ID', 'jwt-key-1')
+        }
+        access_token = create_access_token(identity=user_identity, additional_claims=add_claims)
         return jsonify({
             'access_token': access_token,
             'expires_in': current_app.config['JWT_ACCESS_TOKEN_EXPIRES']
-        })
-    
+        }), 200
     except Exception as e:
         current_app.logger.error(f"Token refresh failed: {str(e)}")
         return api_error_response(401, "Token refresh failed")
@@ -382,24 +402,61 @@ def get_user_permissions(roles: List[str]) -> List[str]:
     return list(permissions)
 
 
-def store_refresh_token(user_id: int, refresh_token: str):
-    """Store refresh token securely (implement with encryption)"""
-    # In production, encrypt and store in database or Redis with TTL
-    # For now, just log
-    current_app.logger.debug(f"Stored refresh token for user {user_id}")
+def _hash_token(raw: str) -> str:
+    return hashlib.sha256(raw.encode('utf-8')).hexdigest()
+
+def store_refresh_token(user_id: int, refresh_token: str, rotate: bool = True):
+    """Store hashed refresh token in Redis with rotation family keys."""
+    store = current_app.extensions.get('token_store')
+    if not store:
+        return
+    token_hash = _hash_token(refresh_token)
+    family = f"jwt:rf:{user_id}"
+    ttl = int(current_app.config.get('JWT_REFRESH_TOKEN_EXPIRES', 2592000))
+    if rotate:
+        last = store.get(f"{family}:latest")
+        if last:
+            store.setex(f"{family}:bl:{last}", ttl, '1')
+        store.setex(f"{family}:latest", ttl, token_hash)
+    store.setex(f"{family}:ok:{token_hash}", ttl, '1')
 
 
-def invalidate_refresh_token(user_id: int):
-    """Invalidate stored refresh token"""
-    # Implementation for token invalidation
-    current_app.logger.debug(f"Invalidated refresh token for user {user_id}")
+def invalidate_refresh_tokens(user_id: int):
+    """Invalidate all refresh tokens for a user (logout-all)."""
+    store = current_app.extensions.get('token_store')
+    if not store:
+        return
+    family = f"jwt:rf:{user_id}"
+    store.setex(f"{family}:logout_all", int(current_app.config.get('JWT_REFRESH_TOKEN_EXPIRES', 2592000)), '1')
 
 
-def verify_refresh_token(refresh_token: str) -> Optional[Dict[str, Any]]:
-    """Verify refresh token validity"""
-    # Implementation for token verification
-    # This should check against stored tokens and validate signature
-    return {'sub': 'example_user_id'}  # Placeholder
+def rotate_refresh_token(refresh_token: str) -> Optional[Dict[str, Any]]:
+    """Verify, detect reuse, and rotate refresh token using Redis store."""
+    store = current_app.extensions.get('token_store')
+    if not store:
+        return None
+    try:
+        decoded = decode_token(refresh_token)
+    except Exception:
+        return None
+    sub = decoded.get('sub')
+    if not sub:
+        return None
+    token_hash = _hash_token(refresh_token)
+    family = f"jwt:rf:{sub}"
+    # logout-all?
+    if store.get(f"{family}:logout_all"):
+        return None
+    # Reuse detection
+    if store.get(f"{family}:bl:{token_hash}"):
+        invalidate_refresh_tokens(sub)
+        return None
+    if not store.get(f"{family}:ok:{token_hash}"):
+        return None
+    # Rotate: add current to blocklist
+    ttl = int(current_app.config.get('JWT_REFRESH_TOKEN_EXPIRES', 2592000))
+    store.setex(f"{family}:bl:{token_hash}", ttl, '1')
+    return {'sub': str(sub)}
 
 
 # Permission decorators
