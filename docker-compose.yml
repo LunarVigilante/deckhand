@@ -1,0 +1,216 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: ${POSTGRES_CONTAINER_NAME:-discord_bot_postgres}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-discord_bot_platform}
+      POSTGRES_USER: ${POSTGRES_USER:-discord_bot_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-your_secure_password_here}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init-scripts:/docker-entrypoint-initdb.d
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - discord_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-discord_bot_user} -d ${POSTGRES_DB:-discord_bot_platform}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${REDIS_CONTAINER_NAME:-discord_bot_redis}
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-""}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - discord_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  api:
+    build:
+      context: ../backend/api
+      dockerfile: Dockerfile
+    container_name: ${API_CONTAINER_NAME:-discord_bot_api}
+    restart: unless-stopped
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-production}
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-discord_bot_user}:${POSTGRES_PASSWORD:-your_secure_password_here}@postgres:5432/${POSTGRES_DB:-discord_bot_platform}
+      - REDIS_URL=redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379/${REDIS_DB:-0}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - DISCORD_CLIENT_SECRET=${DISCORD_CLIENT_SECRET}
+      - DISCORD_REDIRECT_URI=${DISCORD_REDIRECT_URI}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+      - ANILIST_CLIENT_ID=${ANILIST_CLIENT_ID}
+      - ANILIST_CLIENT_SECRET=${ANILIST_CLIENT_SECRET}
+      - TVDB_API_KEY=${TVDB_API_KEY}
+      - TVDB_PIN=${TVDB_PIN}
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY}
+      - FLASK_SECRET_KEY=${FLASK_SECRET_KEY}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - logs:/app/logs
+      - ./shared:/app/shared:ro
+    ports:
+      - "${API_PORT:-5000}:5000"
+    networks:
+      - discord_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  bot:
+    build:
+      context: ../backend/bot
+      dockerfile: Dockerfile
+    container_name: ${BOT_CONTAINER_NAME:-discord_bot_worker}
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-discord_bot_user}:${POSTGRES_PASSWORD:-your_secure_password_here}@postgres:5432/${POSTGRES_DB:-discord_bot_platform}
+      - REDIS_URL=redis://${REDIS_PASSWORD:+:${REDIS_PASSWORD}@}redis:6379/${REDIS_DB:-0}
+      - DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}
+      - DISCORD_GUILD_ID=${DISCORD_GUILD_ID}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+      - OPENROUTER_BASE_URL=${OPENROUTER_BASE_URL}
+      - TMDB_API_KEY=${TMDB_API_KEY}
+      - ANILIST_CLIENT_ID=${ANILIST_CLIENT_ID}
+      - ANILIST_CLIENT_SECRET=${ANILIST_CLIENT_SECRET}
+      - TVDB_API_KEY=${TVDB_API_KEY}
+      - TVDB_PIN=${TVDB_PIN}
+      - NOTIFICATION_CHANNEL_ID=${NOTIFICATION_CHANNEL_ID}
+      - GIVEAWAY_CHANNEL_ID=${GIVEAWAY_CHANNEL_ID}
+      - MEDIA_RELEASE_CHANNEL_ID=${MEDIA_RELEASE_CHANNEL_ID}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - SCHEDULER_TIMEZONE=${SCHEDULER_TIMEZONE:-UTC}
+      - DEBUG=${DEBUG:-false}
+    volumes:
+      - logs:/app/logs
+      - ./shared:/app/shared:ro
+    networks:
+      - discord_network
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "ps aux | grep -v grep | grep main.py || exit 1"]
+      interval: 60s
+      timeout: 30s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: production
+    container_name: ${FRONTEND_CONTAINER_NAME:-discord_bot_frontend}
+    restart: unless-stopped
+    environment:
+      - VITE_API_URL=http://api:5000
+      - VITE_DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+      - VITE_DISCORD_REDIRECT_URI=${DISCORD_REDIRECT_URI}
+    ports:
+      - "${VITE_PORT:-3000}:80"
+    networks:
+      - discord_network
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Development override - uncomment for development with hot reload
+  # frontend-dev:
+  #   build:
+  #     context: ../frontend
+  #     dockerfile: Dockerfile
+  #     target: development
+  #   container_name: discord_bot_frontend_dev
+  #   restart: unless-stopped
+  #   environment:
+  #     - VITE_API_URL=http://localhost:5000
+  #     - VITE_DISCORD_CLIENT_ID=${DISCORD_CLIENT_ID}
+  #     - VITE_DISCORD_REDIRECT_URI=${DISCORD_REDIRECT_URI}
+  #   ports:
+  #     - "${VITE_PORT:-3000}:3000"
+  #   volumes:
+  #     - ../frontend:/app
+  #     - /app/node_modules
+  #   networks:
+  #     - discord_network
+  #   depends_on:
+  #     - api
+
+networks:
+  discord_network:
+    driver: bridge
+    name: ${DOCKER_NETWORK:-discord_bot_network}
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+    name: ${POSTGRES_VOLUME:-discord_bot_postgres_data}
+  redis_data:
+    driver: local
+    name: ${REDIS_VOLUME:-discord_bot_redis_data}
+  logs:
+    driver: local
+    name: ${LOGS_VOLUME:-discord_bot_logs}
